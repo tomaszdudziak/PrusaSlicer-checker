@@ -1897,6 +1897,7 @@ void PrintObject::bridge_over_infill()
                         }
                         switch (surface_to_region[candidate]->region().config().fill_pattern.value) {
                         case ipHilbertCurve: bridging_angle += 0.25 * PI; break;
+                        //case ipUooCurve: bridging_angle += 0.25 * PI; break;
                         case ipOctagramSpiral: bridging_angle += (1.0 / 16.0) * PI; break;
                         default: break;
                         }
