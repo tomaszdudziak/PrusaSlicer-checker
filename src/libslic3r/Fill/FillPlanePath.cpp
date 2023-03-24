@@ -209,8 +209,7 @@ static inline Point hilbert_n_to_xy(const size_t n)
     return Point(x, y);
 }
 
-template<typename Output>
-static void generate_hilbert_curve(coord_t min_x, coord_t min_y, coord_t max_x, coord_t max_y, Output &output)
+template<typename Output> static void generate_hilbert_curve(coord_t min_x, coord_t min_y, coord_t max_x, coord_t max_y, Output &output)
 {
     // Minimum power of two square to fit the domain.
     size_t sz = 2;
@@ -219,15 +218,15 @@ static void generate_hilbert_curve(coord_t min_x, coord_t min_y, coord_t max_x, 
         size_t sz0 = std::max(max_x + 1 - min_x, max_y + 1 - min_y);
         while (sz < sz0) {
             sz = sz << 1;
-            ++ pw;
+            ++pw;
         }
     }
 
     size_t sz2 = sz * sz;
     output.reserve(sz2);
-    for (size_t i = 0; i < sz2; ++ i) {
+    for (size_t i = 0; i < sz2; ++i) {
         Point p = hilbert_n_to_xy(i);
-        output.add_point({ p.x() + min_x, p.y() + min_y });
+        output.add_point({p.x() + min_x, p.y() + min_y});
     }
 }
 
@@ -237,6 +236,57 @@ void FillHilbertCurve::generate(coord_t min_x, coord_t min_y, coord_t max_x, coo
         generate_hilbert_curve(min_x, min_y, max_x, max_y, static_cast<InfillPolylineClipper&>(output));
     else
         generate_hilbert_curve(min_x, min_y, max_x, max_y, output);
+}
+
+template<typename Output>
+void add_uoo_square(coord_t square_x, coord_t square_y, coord_t pattern_n, Output &output)
+{
+    coord_t x = square_x * pattern_n;
+    coord_t y = square_y * pattern_n;
+    if ((square_x + square_y) % 2 == 0) {
+        for (int i = 0; i < pattern_n; i++) {
+            output.add_point({x + i, y + (pattern_n - 1) * ((i+1) % 2)});
+            output.add_point({x + i, y + (pattern_n - 1) * ((i) % 2)});
+        }
+    } else {
+        for (int i = 0; i < pattern_n; i++) {
+            output.add_point({x + (pattern_n - 1) * ((i) % 2), y + i});
+            output.add_point({x + (pattern_n - 1) * ((i+1) % 2), y + i});
+        }
+    }
+}
+template<typename Output>
+static void generate_uoo_curve(coord_t min_x, coord_t min_y, coord_t max_x, coord_t max_y, Output &output)
+{
+    size_t pattern_n = 9;
+    coord_t width_p   = max_x - min_x;
+    coord_t height_p  = max_y - min_y;
+    coord_t width_s   = 1 + ceil(width_p / (2 * pattern_n)) * 2;
+    coord_t height_s  = 1 + ceil(height_p / (2 * pattern_n)) * 2;
+    output.add_point({0, 0});
+    //output.add_point({4, 0});
+    //output.add_point({4, 4});
+    //output.add_point({0, 8});
+    //output.add_point({4, 12});
+    //output.add_point({8, 12});
+
+    for (coord_t square_y = 0; square_y < height_s; square_y++) {
+        for (coord_t square_x = 0; square_x < width_s; square_x++) {
+            add_uoo_square(square_x, square_y, pattern_n, output);
+        }
+        square_y++;
+        for (coord_t square_x = width_s - 1; square_x >= 0; square_x--) {
+            add_uoo_square(square_x, square_y, pattern_n, output);
+        }
+    }
+}
+
+void FillUooCurve::generate(coord_t min_x, coord_t min_y, coord_t max_x, coord_t max_y, const double /* resolution */, InfillPolylineOutput &output)
+{
+    if (output.clips())
+        generate_uoo_curve(min_x, min_y, max_x, max_y, static_cast<InfillPolylineClipper&>(output));
+    else
+        generate_uoo_curve(min_x, min_y, max_x, max_y, output);
 }
 
 template<typename Output>

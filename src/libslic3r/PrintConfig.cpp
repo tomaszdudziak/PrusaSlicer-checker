@@ -105,6 +105,7 @@ static const t_config_enum_values s_keys_map_InfillPattern {
     { "3dhoneycomb",        ip3DHoneycomb },
     { "gyroid",             ipGyroid },
     { "hilbertcurve",       ipHilbertCurve },
+    { "uoocurve",           ipUooCurve },
     { "archimedeanchords",  ipArchimedeanChords },
     { "octagramspiral",     ipOctagramSpiral },
     { "adaptivecubic",      ipAdaptiveCubic },
@@ -818,7 +819,8 @@ void PrintConfigDef::init_fff_params()
         { "concentric",         L("Concentric") },
         { "hilbertcurve",       L("Hilbert Curve") },
         { "archimedeanchords",  L("Archimedean Chords") },
-        { "octagramspiral",     L("Octagram Spiral") }
+        { "octagramspiral",     L("Octagram Spiral") },
+        { "uoocurve",           L("Uoo Curve") }
     });
 
     // solid_fill_pattern is an obsolete equivalent to top_fill_pattern/bottom_fill_pattern.
