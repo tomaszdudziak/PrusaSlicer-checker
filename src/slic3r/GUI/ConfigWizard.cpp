@@ -10,6 +10,7 @@
 #include <boost/format.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/nowide/convert.hpp>
 #include <boost/dll/runtime_symbol_info.hpp>
 
@@ -57,6 +58,7 @@
 #include "UnsavedChangesDialog.hpp"
 #include "slic3r/Utils/AppUpdater.hpp"
 #include "slic3r/GUI/I18N.hpp"
+#include "slic3r/Config/Version.hpp"
 
 #if defined(__linux__) && defined(__WXGTK3__)
 #define wxLinux_gtk3 true
@@ -118,7 +120,7 @@ BundleMap BundleMap::load()
     const auto vendor_dir = (boost::filesystem::path(Slic3r::data_dir()) / "vendor").make_preferred();
     const auto archive_dir = (boost::filesystem::path(Slic3r::data_dir()) / "cache" / "vendor").make_preferred();
     const auto rsrc_vendor_dir = (boost::filesystem::path(resources_dir()) / "profiles").make_preferred();
-
+    const auto cache_dir = boost::filesystem::path(Slic3r::data_dir()) / "cache"; // for Index
     // Load Prusa bundle from the datadir/vendor directory or from datadir/cache/vendor (archive) or from resources/profiles.
     auto prusa_bundle_path = (vendor_dir / PresetBundle::PRUSA_BUNDLE).replace_extension(".ini");
     BundleLocation prusa_bundle_loc = BundleLocation::IN_VENDOR;
@@ -138,7 +140,7 @@ BundleMap BundleMap::load()
 
     // Load the other bundles in the datadir/vendor directory
     // and then additionally from datadir/cache/vendor (archive) and resources/profiles.
-    // Should we concider case where archive has older profiles than resources (shouldnt happen)?
+    // Should we concider case where archive has older profiles than resources (shouldnt happen)? -> YES, it happens during re-configuration when running older PS after newer version
     typedef std::pair<const fs::path&, BundleLocation> DirData;
     std::vector<DirData> dir_list { {vendor_dir, BundleLocation::IN_VENDOR},  {archive_dir, BundleLocation::IN_ARCHIVE},  {rsrc_vendor_dir, BundleLocation::IN_RESOURCES} };
     for ( auto dir : dir_list) {
@@ -150,6 +152,49 @@ BundleMap BundleMap::load()
 
                 // Don't load this bundle if we've already loaded it.
                 if (res.find(id) != res.end()) { continue; }
+
+                // Fresh index should be in archive_dir, otherwise look for it in cache 
+                // Then if not in archive or cache - it could be 3rd party profile that user just copied to vendor folder (both ini and cache)
+                
+                fs::path idx_path (archive_dir / (id + ".idx"));
+                if (!boost::filesystem::exists(idx_path)) {
+                    BOOST_LOG_TRIVIAL(error) << format("Missing index %1% when loading bundle %2%. Going to search for it in cache folder.", idx_path.string(), id);
+                    idx_path = fs::path(cache_dir / (id + ".idx"));
+                }
+                if (!boost::filesystem::exists(idx_path)) {
+                    BOOST_LOG_TRIVIAL(error) << format("Missing index %1% when loading bundle %2%. Going to search for it in vendor folder. Is it a 3rd party profile?", idx_path.string(), id);
+                    idx_path = fs::path(vendor_dir / (id + ".idx"));
+                }
+                if (!boost::filesystem::exists(idx_path)) {
+                    BOOST_LOG_TRIVIAL(error) << format("Could not load bundle %1% due to missing index %2%.", id, idx_path.string());
+                    continue;
+                }
+
+                Slic3r::GUI::Config::Index index;
+                try {
+                    index.load(idx_path);
+                }
+                catch (const std::exception& /* err */) {
+                    BOOST_LOG_TRIVIAL(error) << format("Could not load bundle %1% due to invalid index %2%.", id, idx_path.string());
+                    continue;
+                }
+                const auto recommended_it = index.recommended();
+                if (recommended_it == index.end()) {
+                    BOOST_LOG_TRIVIAL(error) << format("Could not load bundle %1% due to no recommended version in index %2%.", id, idx_path.string());
+                    continue;
+                }
+                const auto recommended = recommended_it->config_version;
+                VendorProfile vp;
+                try {
+                    vp = VendorProfile::from_ini(dir_entry, true);
+                }
+                catch (const std::exception& e) {
+                    BOOST_LOG_TRIVIAL(error) << format("Could not load bundle %1% due to corrupted profile file %2%. Message: %3%", id, dir_entry.path().string(), e.what());
+                    continue;
+                }
+                // Don't load
+                if (vp.config_version > recommended)
+                    continue;
 
                 Bundle bundle;
                 if (bundle.load(dir_entry.path(), dir.second))
@@ -1118,7 +1163,7 @@ void PageMaterials::sort_list_data(StringList* list, bool add_All_item, bool mat
 // in alphabetical order
     
     std::vector<std::reference_wrapper<const std::string>> prusa_profiles;
-    std::vector<std::reference_wrapper<const std::string>> other_profiles;
+    std::vector<std::pair<std::wstring ,std::reference_wrapper<const std::string>>> other_profiles; // first is lower case id for sorting
     bool add_TEMPLATES_item = false;
     for (int i = 0 ; i < list->size(); ++i) {
         const std::string& data = list->get_data(i);
@@ -1131,7 +1176,7 @@ void PageMaterials::sort_list_data(StringList* list, bool add_All_item, bool mat
         if (!material_type_ordering && data.find("Prusa") != std::string::npos)
             prusa_profiles.push_back(data);
         else 
-            other_profiles.push_back(data);
+            other_profiles.emplace_back(boost::algorithm::to_lower_copy(boost::nowide::widen(data)),data);
     }
     if (material_type_ordering) {
         
@@ -1141,10 +1186,10 @@ void PageMaterials::sort_list_data(StringList* list, bool add_All_item, bool mat
             for (size_t profs = end_of_sorted; profs < other_profiles.size(); profs++)
             {
                 // find instead compare because PET vs PETG
-                if (other_profiles[profs].get().find(value) != std::string::npos) {
+                if (other_profiles[profs].second.get().find(value) != std::string::npos) {
                     //swap
                     if(profs != end_of_sorted) {
-                        std::reference_wrapper<const std::string> aux = other_profiles[end_of_sorted];
+                        std::pair<std::wstring, std::reference_wrapper<const std::string>> aux = other_profiles[end_of_sorted];
                         other_profiles[end_of_sorted] = other_profiles[profs];
                         other_profiles[profs] = aux;
                     }
@@ -1157,8 +1202,8 @@ void PageMaterials::sort_list_data(StringList* list, bool add_All_item, bool mat
         std::sort(prusa_profiles.begin(), prusa_profiles.end(), [](std::reference_wrapper<const std::string> a, std::reference_wrapper<const std::string> b) {
             return a.get() < b.get();
             });
-        std::sort(other_profiles.begin(), other_profiles.end(), [](std::reference_wrapper<const std::string> a, std::reference_wrapper<const std::string> b) {
-            return a.get() < b.get();
+        std::sort(other_profiles.begin(), other_profiles.end(), [](const std::pair<std::wstring, std::reference_wrapper<const std::string>>& a, const std::pair<std::wstring, std::reference_wrapper<const std::string>>& b) {
+            return a.first <b.first;
             });
     }
     
@@ -1170,7 +1215,7 @@ void PageMaterials::sort_list_data(StringList* list, bool add_All_item, bool mat
     for (const auto& item : prusa_profiles)
         list->append(item, &const_cast<std::string&>(item.get()));
     for (const auto& item : other_profiles)
-        list->append(item, &const_cast<std::string&>(item.get()));
+        list->append(item.second, &const_cast<std::string&>(item.second.get()));
     
 }     
 
@@ -1181,20 +1226,19 @@ void PageMaterials::sort_list_data(PresetList* list, const std::vector<ProfilePr
     // then the rest
     // in alphabetical order
     std::vector<ProfilePrintData> prusa_profiles;
-    std::vector<ProfilePrintData> other_profiles;
-    //for (int i = 0; i < data.size(); ++i) {
+    std::vector<std::pair<std::wstring, ProfilePrintData>> other_profiles; // first is lower case id for sorting
     for (const auto& item : data) {
         const std::string& name = item.name;
         if (name.find("Prusa") != std::string::npos)
             prusa_profiles.emplace_back(item);
         else
-            other_profiles.emplace_back(item);
+            other_profiles.emplace_back(boost::algorithm::to_lower_copy(boost::nowide::widen(name)), item);
     }
     std::sort(prusa_profiles.begin(), prusa_profiles.end(), [](ProfilePrintData a, ProfilePrintData b) {
         return a.name.get() < b.name.get();
         });
-    std::sort(other_profiles.begin(), other_profiles.end(), [](ProfilePrintData a, ProfilePrintData b) {
-        return a.name.get() < b.name.get();
+    std::sort(other_profiles.begin(), other_profiles.end(), [](const std::pair<std::wstring, ProfilePrintData>& a, const std::pair<std::wstring, ProfilePrintData>& b) {
+        return a.first < b.first;
         });
     list->Clear();
     for (size_t i = 0; i < prusa_profiles.size(); ++i) {
@@ -1202,8 +1246,8 @@ void PageMaterials::sort_list_data(PresetList* list, const std::vector<ProfilePr
         list->Check(i, prusa_profiles[i].checked);
     }
     for (size_t i = 0; i < other_profiles.size(); ++i) {
-        list->append(std::string(other_profiles[i].name) + (other_profiles[i].omnipresent || template_shown ? "" : " *"), &const_cast<std::string&>(other_profiles[i].name.get()));
-        list->Check(i + prusa_profiles.size(), other_profiles[i].checked);
+        list->append(std::string(other_profiles[i].second.name) + (other_profiles[i].second.omnipresent || template_shown ? "" : " *"), &const_cast<std::string&>(other_profiles[i].second.name.get()));
+        list->Check(i + prusa_profiles.size(), other_profiles[i].second.checked);
     }
 }
 
@@ -1425,8 +1469,7 @@ PageDownloader::PageDownloader(ConfigWizard* parent)
     append(box_allow_downloads);
 
     // TRN ConfigWizard : Downloader : %1% = "PrusaSlicer"
-    append_text(format_wxstr(_L(
-        "If enabled, %1% registers to start on custom URL on www.printables.com."
+    append_text(format_wxstr(_L("If enabled, %1% registers to start on custom URL on www.printables.com."
         " You will be able to use button with %1% logo to open models in this %1%."
         " The model will be downloaded into folder you choose bellow."
     ), SLIC3R_APP_NAME));
@@ -1627,9 +1670,17 @@ PageVendors::PageVendors(ConfigWizard *parent)
 
     auto boldfont = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
     boldfont.SetWeight(wxFONTWEIGHT_BOLD);
+    // Copy vendors from bundle map to vector, so we can sort it without case sensitivity
+    std::vector<std::pair<std::wstring, const VendorProfile*>> vendors;
+    for (const auto& pair : wizard_p()->bundles) {
+        vendors.emplace_back(boost::algorithm::to_lower_copy(boost::nowide::widen(pair.second.vendor_profile->name)),pair.second.vendor_profile);
+    }
+    std::sort(vendors.begin(), vendors.end(), [](const std::pair<std::wstring, const VendorProfile*>& a, const std::pair<std::wstring, const VendorProfile*>& b) {
+        return a.first < b.first;
+        });
 
-    for (const auto &pair : wizard_p()->bundles) {
-        const VendorProfile *vendor = pair.second.vendor_profile;
+    for (const std::pair<std::wstring, const VendorProfile*>& v : vendors) {
+        const VendorProfile* vendor = v.second;
         if (vendor->id == PresetBundle::PRUSA_BUNDLE) { continue; }
         if (vendor && vendor->templates_profile)
             continue;
@@ -1639,8 +1690,8 @@ PageVendors::PageVendors(ConfigWizard *parent)
             wizard_p()->on_3rdparty_install(vendor, cbox->IsChecked());
         });
 
-        const auto &vendors = appconfig.vendors();
-        const bool enabled = vendors.find(pair.first) != vendors.end();
+        const auto &acvendors = appconfig.vendors();
+        const bool enabled = acvendors.find(vendor->id) != acvendors.end();
         if (enabled) {
             cbox->SetValue(true);
 
@@ -1761,7 +1812,7 @@ PageBuildVolume::PageBuildVolume(ConfigWizard* parent)
     : ConfigWizardPage(parent, _L("Build Volume"), _L("Build Volume"), 1)
     , build_volume(new DiamTextCtrl(this))
 {
-    append_text(_L("Set vertical size of your printer."));
+    append_text(_L("Set the printer height."));
 
     wxString value = "200";
     build_volume->SetValue(value);
@@ -2273,8 +2324,21 @@ void ConfigWizard::priv::load_pages()
     index->add_page(page_msla);
     if (!only_sla_mode) {
         index->add_page(page_vendors);
-        for (const auto &pages : pages_3rdparty) {
-            for ( PagePrinters* page : { pages.second.first, pages.second.second })
+
+        // Copy pages names from map to vector, so we can sort it without case sensitivity
+        std::vector<std::pair<std::wstring, std::string>> sorted_vendors;
+        for (const auto& pages : pages_3rdparty) {
+            sorted_vendors.emplace_back(boost::algorithm::to_lower_copy(boost::nowide::widen(pages.first)), pages.first);
+        }
+        std::sort(sorted_vendors.begin(), sorted_vendors.end(), [](const std::pair<std::wstring, std::string>& a, const std::pair<std::wstring, std::string>& b) {
+            return a.first < b.first;
+            });
+
+        for (const std::pair<std::wstring, std::string> v : sorted_vendors) {
+            const auto& pages = pages_3rdparty.find(v.second);
+            if (pages == pages_3rdparty.end())
+                continue; // Should not happen
+            for ( PagePrinters* page : { pages->second.first, pages->second.second })
                 if (page && page->install)
                     index->add_page(page);
         }
@@ -3172,6 +3236,8 @@ bool ConfigWizard::priv::apply_config(AppConfig *app_config, PresetBundle *prese
         }
         else {
             auto changed = [app_config, &appconfig_new = std::as_const(this->appconfig_new)](const std::string& section_name) {
+                if (!appconfig_new.has_section(section_name))
+                    return false;
                 return (app_config->has_section(section_name) ? app_config->get_section(section_name) : std::map<std::string, std::string>()) != appconfig_new.get_section(section_name);
             };
             bool is_filaments_changed     = changed(AppConfig::SECTION_FILAMENTS);
@@ -3285,6 +3351,8 @@ ConfigWizard::ConfigWizard(wxWindow *parent)
     : DPIDialog(parent, wxID_ANY, wxString(SLIC3R_APP_NAME) + " - " + _(name()), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
     , p(new priv(this))
 {
+    wxBusyCursor wait;
+
     this->SetFont(wxGetApp().normal_font());
 
     p->load_vendors();

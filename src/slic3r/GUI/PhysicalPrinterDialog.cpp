@@ -116,7 +116,7 @@ void PresetForPrinter::update_full_printer_name()
     wxString printer_name   = m_parent->get_printer_name();
     wxString preset_name    = m_presets_list->GetString(m_presets_list->GetSelection());
 
-    m_full_printer_name->SetLabelText(printer_name + " * " + preset_name);
+    m_full_printer_name->SetLabelText(printer_name + from_u8(PhysicalPrinter::separator()) + preset_name);
 }
 
 std::string PresetForPrinter::get_preset_name()
@@ -654,6 +654,24 @@ wxString PhysicalPrinterDialog::get_printer_name()
 
 void PhysicalPrinterDialog::update_full_printer_names()
 {
+    // check input symbols for usability
+
+    const char* unusable_symbols = "<>[]:/\\|?*\"";
+
+    wxString printer_name = m_printer_name->GetValue();
+    for (size_t i = 0; i < std::strlen(unusable_symbols); i++) {
+        size_t pos = printer_name.find_first_of(unusable_symbols[i]);
+        if (pos != std::string::npos) {
+            wxString str = printer_name.SubString(pos, 1);
+            printer_name.Remove(pos, 1);
+            InfoDialog(this, format_wxstr("%1%: \"%2%\" ", _L("Unexpected character"),  str), 
+                       _L("The following characters are not allowed in the name") + ": " + unusable_symbols).ShowModal();
+            m_printer_name->SetValue(printer_name);
+            m_printer_name->SetInsertionPointEnd();
+            return;
+        }
+    }
+
     for (PresetForPrinter* preset : m_presets)
         preset->update_full_printer_name();
 
@@ -701,11 +719,7 @@ void PhysicalPrinterDialog::on_sys_color_changed()
 void PhysicalPrinterDialog::OnOK(wxEvent& event)
 {
     wxString printer_name = m_printer_name->GetValue();
-    if (printer_name.IsEmpty()) {
-        warning_catcher(this, _L("The supplied name is empty. It can't be saved."));
-        return;
-    }
-    if (printer_name == m_default_name) {
+    if (printer_name.IsEmpty() || printer_name == m_default_name) {
         warning_catcher(this, _L("You have to enter a printer name."));
         return;
     }

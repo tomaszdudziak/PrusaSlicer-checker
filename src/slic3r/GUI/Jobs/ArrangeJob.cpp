@@ -99,7 +99,6 @@ void ArrangeJob::prepare_selected() {
     clear_input();
 
     Model &model = m_plater->model();
-    double stride = bed_stride(m_plater);
 
     std::vector<const Selection::InstanceIdxsList *>
             obj_sel(model.objects.size(), nullptr);
@@ -143,12 +142,6 @@ void ArrangeJob::prepare_selected() {
     // If the selection was empty arrange everything
     if (m_selected.empty())
         m_selected.swap(m_unselected);
-
-    // The strides have to be removed from the fixed items. For the
-    // arrangeable (selected) items bed_idx is ignored and the
-    // translation is irrelevant.
-    for (auto &p : m_unselected)
-        p.translation(X) -= p.bed_idx * stride;
 }
 
 static void update_arrangepoly_slaprint(arrangement::ArrangePolygon &ret,
@@ -183,7 +176,8 @@ static void update_arrangepoly_slaprint(arrangement::ArrangePolygon &ret,
 
         trafo_instance = trafo_instance * po.trafo().cast<float>().inverse();
 
-        auto polys = reserve_vector<Polygon>(3);
+        Polygons polys;
+        polys.reserve(3);
         auto zlvl = -po.get_elevation();
 
         if (omesh) {
@@ -231,8 +225,10 @@ coord_t get_skirt_offset(const Plater* plater) {
     // Try to subtract the skirt from the bed shape so we don't arrange outside of it.
     if (plater->printer_technology() == ptFFF && plater->fff_print().has_skirt()) {
         const auto& print = plater->fff_print();
-        skirt_inset = print.config().skirts.value * print.skirt_flow().width() +
-                                  print.config().skirt_distance.value;
+        if (!print.objects().empty()) {
+            skirt_inset = print.config().skirts.value * print.skirt_flow().width() +
+                          print.config().skirt_distance.value;
+        }
     }
 
     return scaled(skirt_inset);
@@ -240,7 +236,7 @@ coord_t get_skirt_offset(const Plater* plater) {
 
 void ArrangeJob::prepare()
 {
-    wxGetKeyState(WXK_SHIFT) ? prepare_selected() : prepare_all();
+    m_selection_only ? prepare_selected() : prepare_all();
 
     coord_t min_offset = 0;
     for (auto &ap : m_selected) {
@@ -258,6 +254,10 @@ void ArrangeJob::prepare()
         }
         m_min_bed_inset = min_offset;
     }
+
+    double stride = bed_stride(m_plater);
+    get_bed_shape(*m_plater->config(), m_bed);
+    assign_logical_beds(m_unselected, m_bed, stride);
 }
 
 void ArrangeJob::process(Ctl &ctl)
@@ -265,11 +265,9 @@ void ArrangeJob::process(Ctl &ctl)
     static const auto arrangestr = _u8L("Arranging");
 
     arrangement::ArrangeParams params;
-    arrangement::ArrangeBed bed;
-    ctl.call_on_main_thread([this, &params, &bed]{
+    ctl.call_on_main_thread([this, &params]{
            prepare();
            params = get_arrange_params(m_plater);
-           get_bed_shape(*m_plater->config(), bed);
            coord_t min_inset = get_skirt_offset(m_plater) + m_min_bed_inset;
            params.min_bed_distance = std::max(params.min_bed_distance, min_inset);
     }).wait();
@@ -290,13 +288,13 @@ void ArrangeJob::process(Ctl &ctl)
 
     ctl.update_status(0, arrangestr);
 
-    arrangement::arrange(m_selected, m_unselected, bed, params);
+    arrangement::arrange(m_selected, m_unselected, m_bed, params);
 
     params.progressind = [this, count, &ctl](unsigned st) {
         if (st > 0) ctl.update_status(int(count - st) * 100 / status_range(), arrangestr);
     };
 
-    arrangement::arrange(m_unprintable, {}, bed, params);
+    arrangement::arrange(m_unprintable, {}, m_bed, params);
 
     // finalize just here.
     ctl.update_status(int(count) * 100 / status_range(), ctl.was_canceled() ?
@@ -304,7 +302,10 @@ void ArrangeJob::process(Ctl &ctl)
                                       _u8L("Arranging done."));
 }
 
-ArrangeJob::ArrangeJob() : m_plater{wxGetApp().plater()} {}
+ArrangeJob::ArrangeJob(Mode mode)
+    : m_plater{wxGetApp().plater()},
+      m_selection_only{mode == Mode::SelectionOnly}
+{}
 
 static std::string concat_strings(const std::set<std::string> &strings,
                                   const std::string &delim = "\n")
@@ -352,7 +353,9 @@ void ArrangeJob::finalize(bool canceled, std::exception_ptr &eptr) {
         ap.apply();
     }
 
-    m_plater->update();
+    m_plater->update(static_cast<unsigned int>(
+        Plater::UpdateParams::FORCE_FULL_SCREEN_REFRESH));
+
     wxGetApp().obj_manipul()->set_dirty();
 
     if (!m_unarranged.empty()) {
@@ -434,6 +437,28 @@ arrangement::ArrangeParams get_arrange_params(Plater *p)
     params.alignment = pivot;
 
     return params;
+}
+
+void assign_logical_beds(std::vector<arrangement::ArrangePolygon> &items,
+                         const arrangement::ArrangeBed &bed,
+                         double stride)
+{
+
+    // The strides have to be removed from the fixed items. For the
+    // arrangeable (selected) items bed_idx is ignored and the
+    // translation is irrelevant.
+    coord_t bedx = bounding_box(bed).min.x();
+    for (auto &itm : items) {
+        auto bedidx = std::max(arrangement::UNARRANGED,
+                               static_cast<int>(std::floor(
+                                   (get_extents(itm.transformed_poly()).min.x() - bedx) /
+                                   stride)));
+
+        itm.bed_idx = bedidx;
+
+        if (bedidx >= 0)
+            itm.translation.x() -= bedidx * stride;
+    }
 }
 
 }} // namespace Slic3r::GUI
