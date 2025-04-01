@@ -1,6 +1,11 @@
 #include "IconManager.hpp"
+#include <boost/algorithm/string/predicate.hpp>
 #include <cmath>
+#include <numeric>
 #include <boost/log/trivial.hpp>
+#include <boost/nowide/cstdio.hpp>
+#include <boost/filesystem/operations.hpp>
+#include <boost/algorithm/string.hpp>
 #include "nanosvg/nanosvg.h"
 #include "nanosvg/nanosvgrast.h"
 #include "libslic3r/Utils.hpp" // ScopeGuard   
@@ -283,7 +288,7 @@ std::vector<IconManager::Icons> IconManager::init(const std::vector<std::string>
 }
 
 void IconManager::release() {
-	BOOST_LOG_TRIVIAL(error) << "Not implemented yet";
+	BOOST_LOG_TRIVIAL(warning) << "Not implemented yet";
 }
 
 void priv::clear(IconManager::Icons &icons) {

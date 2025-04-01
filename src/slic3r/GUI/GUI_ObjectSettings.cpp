@@ -127,7 +127,7 @@ bool ObjectSettings::update_settings_list()
             optgroup->label_width = 15;
             optgroup->sidetext_width = 5;
 
-            optgroup->m_on_change = [this, config](const t_config_option_key& opt_id, const boost::any& value) {
+            optgroup->on_change = [this, config](const t_config_option_key& opt_id, const boost::any& value) {
                                     this->update_config_values(config);
                                     wxGetApp().obj_list()->changed_object(); };
 
@@ -228,12 +228,12 @@ void ObjectSettings::update_config_values(ModelConfig* config)
         update_config_values(config);
 
         if (is_added) {
-// #ysFIXME - Delete after testing! Very likely this CallAfret is no needed
-//            wxTheApp->CallAfter([this]() {
+            // #ysNOTE - CallAfter is needed here to avoid crash on add new override params! see GH#13450
+            wxTheApp->CallAfter([this]() {
                 wxWindowUpdateLocker noUpdates(m_parent);
                 update_settings_list();
                 m_parent->Layout();
-//            });
+            });
         }
     };
 
@@ -261,8 +261,8 @@ void ObjectSettings::update_config_values(ModelConfig* config)
     }
 
     main_config.apply(config->get(), true);
-    printer_technology == ptFFF  ?  config_manipulation.update_print_fff_config(&main_config) :
-                                    config_manipulation.update_print_sla_config(&main_config) ;
+    if (printer_technology == ptFFF) 
+        config_manipulation.update_print_fff_config(&main_config);
 
     printer_technology == ptFFF  ?  config_manipulation.toggle_print_fff_options(&main_config) :
                                     config_manipulation.toggle_print_sla_options(&main_config) ;

@@ -9,15 +9,21 @@
 #ifndef slic3r_GCodeWriter_hpp_
 #define slic3r_GCodeWriter_hpp_
 
-#include "../libslic3r.h"
-#include "../Extruder.hpp"
-#include "../Point.hpp"
-#include "../PrintConfig.hpp"
-#include "CoolingBuffer.hpp"
-
+#include <string.h>
 #include <string>
 #include <string_view>
 #include <charconv>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <vector>
+#include <cstring>
+
+#include "libslic3r/libslic3r.h"
+#include "libslic3r/Extruder.hpp"
+#include "libslic3r/Point.hpp"
+#include "libslic3r/PrintConfig.hpp"
+#include "CoolingBuffer.hpp"
 
 namespace Slic3r {
 
@@ -30,8 +36,7 @@ public:
         multiple_extruders(false), m_extrusion_axis("E"), m_extruder(nullptr),
         m_single_extruder_multi_material(false),
         m_last_acceleration(0), m_max_acceleration(0),
-        m_last_bed_temperature(0), m_last_bed_temperature_reached(true), 
-        m_lifted(0)
+        m_last_bed_temperature(0), m_last_bed_temperature_reached(true)
         {}
     Extruder*            extruder()             { return m_extruder; }
     const Extruder*      extruder()     const   { return m_extruder; }
@@ -53,6 +58,7 @@ public:
     std::string postamble() const;
     std::string set_temperature(unsigned int temperature, bool wait = false, int tool = -1) const;
     std::string set_bed_temperature(unsigned int temperature, bool wait = false);
+    std::string set_chamber_temperature(unsigned int temperature, bool wait, bool accurate) const;
     std::string set_print_acceleration(unsigned int acceleration)   { return set_acceleration_internal(Acceleration::Print, acceleration); }
     std::string set_travel_acceleration(unsigned int acceleration)  { return set_acceleration_internal(Acceleration::Travel, acceleration); }
     std::string reset_e(bool force = false);
@@ -67,26 +73,57 @@ public:
     std::string toolchange_prefix() const;
     std::string toolchange(unsigned int extruder_id);
     std::string set_speed(double F, const std::string_view comment = {}, const std::string_view cooling_marker = {}) const;
+
+    /**
+     * @brief Return gcode to travel to the specified point.
+     * Feed rate is computed based on the vector (to - m_pos).
+     * Maintains the internal m_pos position.
+     * Movements less than XYZ_EPSILON generate no output.
+     *
+     * @param to Where to travel to.
+     * @param comment Description of the travel purpose.
+     */
+    std::string travel_to_xyz(const Vec3d &to, const std::string_view comment = {});
     std::string travel_to_xy(const Vec2d &point, const std::string_view comment = {});
-    std::string travel_to_xy_G2G3IJ(const Vec2d &point, const Vec2d &ij, const bool ccw, const std::string_view comment = {});
-    std::string travel_to_xyz(const Vec3d &point, const std::string_view comment = {});
     std::string travel_to_z(double z, const std::string_view comment = {});
-    bool        will_move_z(double z) const;
+
+    std::string travel_to_xy_G2G3IJ(const Vec2d &point, const Vec2d &ij, const bool ccw, const std::string_view comment = {});
+
+    /**
+     * @brief Generate G-Code to travel to the specified point unconditionally.
+     * Feed rate is computed based on the vector (to - m_pos).
+     * Maintains the internal m_pos position.
+     * The distance test XYZ_EPSILON is not performed.
+     * @param to The point to travel to.
+     * @param comment Description of the travel purpose.
+     */
+    std::string travel_to_xyz_force(const Vec3d &to, const std::string_view comment = {});
+    std::string travel_to_xy_force(const Vec2d &point, const std::string_view comment = {});
+    std::string travel_to_z_force(double z, const std::string_view comment = {});
+
+    /**
+     * @brief Generate G-Code to move to the specified point while extruding.
+     * Maintains the internal m_pos position.
+     * The distance test XYZ_EPSILON is not performed.
+     * @param point The point to move to.
+     * @param dE The E-steps to extrude while moving.
+     * @param comment Description of the movement purpose.
+     */
     std::string extrude_to_xy(const Vec2d &point, double dE, const std::string_view comment = {});
+    std::string extrude_to_xyz(const Vec3d &point, double dE, const std::string_view comment = {});
+
     std::string extrude_to_xy_G2G3IJ(const Vec2d &point, const Vec2d &ij, const bool ccw, double dE, const std::string_view comment);
-//    std::string extrude_to_xyz(const Vec3d &point, double dE, const std::string_view comment = {});
+
     std::string retract(bool before_wipe = false);
     std::string retract_for_toolchange(bool before_wipe = false);
     std::string unretract();
-    std::string lift();
-    std::string unlift();
 
     // Current position of the printer, in G-code coordinates.
     // Z coordinate of current position contains zhop. If zhop is applied (this->zhop() > 0),
     // then the print_z = this->get_position().z() - this->zhop().
     Vec3d       get_position() const { return m_pos; }
-    // Current Z hop value.
-    double      get_zhop() const { return m_lifted; }
+    // Zhop value is obsolete. This is for backwards compability.
+    double      get_zhop() const { return 0; }
     // Update position of the print head based on the final position returned by a custom G-code block.
     // The new position Z coordinate contains the Z-hop.
     // GCodeWriter expects the custom script to NOT change print_z, only Z-hop, thus the print_z is maintained
@@ -117,7 +154,6 @@ private:
 
     unsigned int    m_last_bed_temperature;
     bool            m_last_bed_temperature_reached;
-    double          m_lifted;
     Vec3d           m_pos = Vec3d::Zero();
 
     enum class Acceleration {
@@ -125,7 +161,6 @@ private:
         Print
     };
 
-    std::string _travel_to_z(double z, const std::string_view comment);
     std::string _retract(double length, double restart_extra, const std::string_view comment);
     std::string set_acceleration_internal(Acceleration type, unsigned int acceleration);
 };
@@ -160,6 +195,9 @@ public:
     static constexpr const std::array<double, 10> pow_10    {   1.,     10.,    100.,    1000.,    10000.,    100000.,    1000000.,    10000000.,    100000000.,    1000000000.};
     static constexpr const std::array<double, 10> pow_10_inv{1./1.,  1./10., 1./100., 1./1000., 1./10000., 1./100000., 1./1000000., 1./10000000., 1./100000000., 1./1000000000.};
 
+    // Compute XYZ_EPSILON based on XYZF_EXPORT_DIGITS
+    static constexpr double XYZ_EPSILON = pow_10_inv[XYZF_EXPORT_DIGITS];
+
     // Quantize doubles to a resolution of the G-code.
     static double                                 quantize(double v, size_t ndigits) { return std::round(v * pow_10[ndigits]) * pow_10_inv[ndigits]; }
     static double                                 quantize_xyzf(double v) { return quantize(v, XYZF_EXPORT_DIGITS); }
@@ -168,6 +206,8 @@ public:
         { return { quantize(pt.x(), XYZF_EXPORT_DIGITS), quantize(pt.y(), XYZF_EXPORT_DIGITS) }; }
     static Vec3d                                  quantize(const Vec3d &pt)
         { return { quantize(pt.x(), XYZF_EXPORT_DIGITS), quantize(pt.y(), XYZF_EXPORT_DIGITS), quantize(pt.z(), XYZF_EXPORT_DIGITS) }; }
+    static Vec2d                                  quantize(const Vec2f &pt)
+        { return { quantize(double(pt.x()), XYZF_EXPORT_DIGITS), quantize(double(pt.y()), XYZF_EXPORT_DIGITS) }; }
 
     void emit_axis(const char axis, const double v, size_t digits);
 
@@ -194,6 +234,10 @@ public:
     }
 
     void emit_e(const std::string_view axis, double v) {
+        const double precision{std::pow(10.0, -E_EXPORT_DIGITS)};
+        if (std::abs(v) < precision) {
+            v = v < 0 ? -precision : precision;
+        }
         if (! axis.empty()) {
             // not gcfNoExtrusion
             this->emit_axis(axis[0], v, E_EXPORT_DIGITS);
@@ -205,7 +249,8 @@ public:
     }
 
     void emit_string(const std::string_view s) {
-        strncpy(ptr_err.ptr, s.data(), s.size());
+        // Be aware that std::string_view::data() returns a pointer to a buffer that is not necessarily null-terminated.
+        memcpy(ptr_err.ptr, s.data(), s.size());
         ptr_err.ptr += s.size();
     }
 

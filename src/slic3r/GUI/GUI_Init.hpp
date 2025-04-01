@@ -14,11 +14,16 @@ namespace GUI {
 
 struct OpenGLVersions
 {
-	static const std::vector<std::string> core_str;
-	static const std::vector<std::string> precore_str;
-
 	static const std::vector<std::pair<int, int>> core;
-	static const std::vector<std::pair<int, int>> precore;
+};
+
+struct CLISelectedProfiles
+{
+    std::string                 print;
+    std::string                 printer;
+    std::vector<std::string>    materials;
+
+    bool has_valid_data() { return !print.empty() && !printer.empty() && !materials.empty(); }
 };
 
 struct GUI_InitParams
@@ -32,17 +37,18 @@ struct GUI_InitParams
     std::vector<std::string>    load_configs;
     DynamicPrintConfig          extra_config;
     std::vector<std::string>    input_files;
+    CLISelectedProfiles         selected_presets;
 
-	bool	                    start_as_gcodeviewer;
-	bool						start_downloader;
-	bool					    delete_after_load;
+    bool                        start_as_gcodeviewer            { false };
+    bool                        start_downloader                { false };
+    bool                        delete_after_load               { false };
     std::string                 download_url;
-#if ENABLE_GL_CORE_PROFILE
-	std::pair<int, int>         opengl_version;
-#if ENABLE_OPENGL_DEBUG_OPTION
-	bool                        opengl_debug;
-#endif // ENABLE_OPENGL_DEBUG_OPTION
-#endif // ENABLE_GL_CORE_PROFILE
+#if !SLIC3R_OPENGL_ES
+    std::pair<int, int>         opengl_version                  { 0, 0 };
+    bool                        opengl_debug                    { false };
+    bool                        opengl_compatibility_profile    { false };
+#endif // !SLIC3R_OPENGL_ES
+    bool                        opengl_aa                       { false };
 };
 
 int GUI_Run(GUI_InitParams &params);

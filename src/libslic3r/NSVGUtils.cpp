@@ -3,12 +3,21 @@
 ///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
 ///|/
 #include "NSVGUtils.hpp"
-#include <array>
-#include <charconv> // to_chars
 
-#include <boost/nowide/iostream.hpp>
-#include "ClipperUtils.hpp"
+#include <boost/nowide/fstream.hpp>
+#include <nanosvg/nanosvg.h>
+#include <array>
+#include <algorithm>
+#include <sstream>
+#include <cassert>
+#include <cstring>
+
 #include "Emboss.hpp" // heal for shape
+#include "libslic3r/ClipperUtils.hpp"
+#include "libslic3r/EmbossShape.hpp"
+#include "libslic3r/Exception.hpp"
+#include "libslic3r/Polygon.hpp"
+#include "libslic3r/Polyline.hpp"
 
 namespace {    
 using namespace Slic3r; // Polygon
@@ -118,6 +127,28 @@ NSVGimage_ptr nsvgParse(const std::string& file_data, const char *units, float d
     data_copy[size]  = '\0'; // data for nsvg must be null terminated
     NSVGimage *image = ::nsvgParse(data_copy.get(), units, dpi);
     return {image, &nsvgDelete};
+}
+
+NSVGimage *init_image(EmbossShape::SvgFile &svg_file){
+    // is already initialized?
+    if (svg_file.image.get() != nullptr)
+        return svg_file.image.get();
+
+    if (svg_file.file_data == nullptr) {
+        // chech if path is known
+        if (svg_file.path.empty())
+            return nullptr;
+        svg_file.file_data = read_from_disk(svg_file.path);
+        if (svg_file.file_data == nullptr)
+            return nullptr;
+    }
+
+    // init svg image
+    svg_file.image = nsvgParse(*svg_file.file_data);
+    if (svg_file.image.get() == NULL)
+        return nullptr;
+
+    return svg_file.image.get();
 }
 
 size_t get_shapes_count(const NSVGimage &image)

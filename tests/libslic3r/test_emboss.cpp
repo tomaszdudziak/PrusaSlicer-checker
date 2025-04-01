@@ -1,4 +1,4 @@
-﻿#include <catch2/catch.hpp>
+﻿#include <catch2/catch_test_macros.hpp>
 
 #include <libslic3r/Emboss.hpp>
 #include <libslic3r/SVG.hpp> // only debug visualization
@@ -101,13 +101,15 @@ std::string get_font_filepath() {
     return resource_dir + "fonts/NotoSans-Regular.ttf";
 }
 
-#include "imgui/imstb_truetype.h"
+// Explicit horror include (used to be implicit) - libslic3r "officialy" does not depend on imgui.
+#include "../../bundled_deps/imgui/imgui/imstb_truetype.h" // stbtt_fontinfo
+#include "boost/nowide/cstdio.hpp"
 TEST_CASE("Read glyph C shape from font, stb library calls ONLY", "[Emboss]") {
     std::string font_path = get_font_filepath();
     char  letter   = 'C';
     
     // Read  font file
-    FILE *file = fopen(font_path.c_str(), "rb");
+    FILE *file = boost::nowide::fopen(font_path.c_str(), "rb");
     REQUIRE(file != nullptr);
     // find size of file
     REQUIRE(fseek(file, 0L, SEEK_END) == 0);
@@ -412,7 +414,7 @@ TEST_CASE("ray segment intersection", "[MeshBoolean]")
     CHECK(abs(*t1 - *t2) < std::numeric_limits<double>::epsilon());
 }
 
-TEST_CASE("triangle intersection", "[]")
+TEST_CASE("triangle intersection", "[its]")
 {
     Vec2d                point(1, 1);
     Vec2d                dir(-1, 0);
@@ -481,7 +483,7 @@ TEST_CASE("Italic check", "[Emboss]")
 #endif // FONT_DIR_PATH
 
 #include "libslic3r/CutSurface.hpp"
-TEST_CASE("Cut surface", "[]")
+TEST_CASE("Cut surface", "[its]")
 {
     std::string  font_path  = get_font_filepath();
     char         letter     = '%';
@@ -567,10 +569,17 @@ TEST_CASE("UndoRedo EmbossShape serialization", "[Emboss]")
     emboss.projection.depth       = 5.;
     emboss.projection.use_surface = true;
     emboss.fix_3mf_tr  = Transform3d::Identity();
-    emboss.svg_file.path = "Everything starts somewhere, though many physicists disagree.\
+    emboss.svg_file = EmbossShape::SvgFile{};
+    emboss.svg_file->path = "Everything starts somewhere, though many physicists disagree.\
  But people have always been dimly aware of the problem with the start of things.\
  They wonder how the snowplough driver gets to work,\
  or how the makers of dictionaries look up the spelling of words.";
+    emboss.svg_file->path_in_3mf = "Všechno někde začíná, i když mnoho fyziků nesouhlasí.\
+ Ale lidé si vždy jen matně uvědomovali problém se začátkem věcí.\
+ Zajímalo je, jak se řidič sněžného pluhu dostane do práce\
+ nebo jak tvůrci slovníků vyhledávají pravopis slov.";
+    emboss.svg_file->file_data = std::make_unique<std::string>("cite: Terry Pratchett");
+
     std::stringstream ss; // any stream can be used
     {
         cereal::BinaryOutputArchive oarchive(ss); // Create an output archive
@@ -586,6 +595,8 @@ TEST_CASE("UndoRedo EmbossShape serialization", "[Emboss]")
     CHECK(emboss.scale == emboss_loaded.scale);
     CHECK(emboss.projection.depth == emboss_loaded.projection.depth);
     CHECK(emboss.projection.use_surface == emboss_loaded.projection.use_surface);
+    CHECK(emboss.svg_file->path == emboss_loaded.svg_file->path);
+    CHECK(emboss.svg_file->path_in_3mf == emboss_loaded.svg_file->path_in_3mf);
 }
 
 

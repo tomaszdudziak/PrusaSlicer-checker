@@ -5,25 +5,31 @@
 #ifndef slic3r_Emboss_hpp_
 #define slic3r_Emboss_hpp_
 
+#include <admesh/stl.h> // indexed_triangle_set
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <vector>
 #include <set>
 #include <optional>
 #include <memory>
-#include <admesh/stl.h> // indexed_triangle_set
+#include <Eigen/Geometry>
+#include <functional>
+#include <map>
+#include <string>
+#include <utility>
+#include <cassert>
+#include <cinttypes>
+#include <cstddef>
+
 #include "Polygon.hpp"
 #include "ExPolygon.hpp"
 #include "EmbossShape.hpp" // ExPolygonsWithIds
 #include "BoundingBox.hpp"
 #include "TextConfiguration.hpp"
+#include "libslic3r/Point.hpp"
 
 namespace Slic3r {
-
-// Extend expolygons with information whether it was successfull healed
-struct HealedExPolygons{
-    ExPolygons expolygons;
-    bool is_healed;
-    operator ExPolygons&() { return expolygons; }
-};
 
 /// <summary>
 /// class with only static function add ability to engraved OR raised
@@ -31,6 +37,9 @@ struct HealedExPolygons{
 /// </summary>
 namespace Emboss
 {    
+    static const float UNION_DELTA = 50.0f; // [approx in nano meters depends on volume scale]
+    static const unsigned UNION_MAX_ITERATIN = 10; // [count]
+
     /// <summary>
     /// Collect fonts registred inside OS
     /// </summary>
@@ -286,8 +295,6 @@ namespace Emboss
     class IProjection : public IProject3d
     {
     public:
-        virtual ~IProjection() = default;
-
         /// <summary>
         /// convert 2d point to 3d points
         /// </summary>
@@ -465,7 +472,11 @@ namespace Emboss
     /// <param name="polygon">Polygon know neighbor of point</param>
     /// <returns>angle(atan2) of normal in polygon point</returns>
     double calculate_angle(int32_t distance, PolygonPoint polygon_point, const Polygon &polygon);
-    std::vector<double> calculate_angles(int32_t distance, const PolygonPoints& polygon_points, const Polygon &polygon);
+    std::vector<double> calculate_angles(
+        const BoundingBoxes &glyph_sizes,
+        const PolygonPoints &polygon_points,
+        const Polygon &polygon
+    );
 
 } // namespace Emboss
 
@@ -474,9 +485,8 @@ namespace Emboss
 void translate(ExPolygonsWithIds &e, const Point &p);
 BoundingBox get_extents(const ExPolygonsWithIds &e);
 void center(ExPolygonsWithIds &e);
-HealedExPolygons union_ex(const ExPolygonsWithIds &shapes, unsigned max_heal_iteration);
 // delta .. safe offset before union (use as boolean close)
 // NOTE: remove unprintable spaces between neighbor curves (made by linearization of curve)
-HealedExPolygons union_with_delta(const ExPolygonsWithIds &shapes, float delta, unsigned max_heal_iteration);
+ExPolygons union_with_delta(EmbossShape &shape, float delta, unsigned max_heal_iteration);
 } // namespace Slic3r
 #endif // slic3r_Emboss_hpp_

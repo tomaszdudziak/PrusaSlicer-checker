@@ -88,7 +88,7 @@ static choice_ctrl* create_word_local_combo(wxWindow *parent)
     temp->SetTextCtrlStyle(wxTE_READONLY);
 	temp->Create(parent, wxID_ANY, wxString(""), wxDefaultPosition, size, 0, nullptr);
 #else
-	temp = new choice_ctrl(parent, wxID_ANY, wxString(""), wxDefaultPosition, size, 0, nullptr, wxCB_READONLY/* | wxBORDER_SIMPLE*/);
+	temp = new choice_ctrl(parent, wxID_ANY, wxString(""), wxDefaultPosition, size, 0, nullptr, wxCB_READONLY | DD_NO_CHECK_ICON);
 #endif //__WXOSX__
 
     temp->SetFont(Slic3r::GUI::wxGetApp().normal_font());
@@ -564,6 +564,7 @@ bool ObjectManipulation::IsShown()
 void ObjectManipulation::UpdateAndShow(const bool show)
 {
 	if (show) {
+        wxQueueEvent(wxGetApp().plater(), new SimpleEvent(EVT_REGENERATE_BED_THUMBNAILS));
         this->set_dirty();
 		this->update_if_dirty();
 	}
@@ -1266,14 +1267,14 @@ ManipulationEditor::ManipulationEditor(ObjectManipulation* parent,
         e.Skip();
     }, this->GetId());
 
-    this->Bind(wxEVT_SET_FOCUS, [this, parent](wxFocusEvent& e)
+    this->GetTextCtrl()->Bind(wxEVT_SET_FOCUS, [this, parent](wxFocusEvent& e)
     {
         parent->set_focused_editor(this);
 
         // needed to show the visual hints in 3D scene
         wxGetApp().plater()->canvas3D()->handle_sidebar_focus_event(m_full_opt_name, true);
         e.Skip();
-    }, this->GetId());
+    });
 
     this->Bind(wxEVT_CHAR, ([this](wxKeyEvent& event)
     {

@@ -78,7 +78,7 @@ std::string PrintBase::output_filename(const std::string &format, const std::str
 			cfg.opt_string("input_filename_base") + default_ext :
 			this->placeholder_parser().process(format, 0, &cfg);
         if (filename.extension().empty())
-            filename = boost::filesystem::change_extension(filename, default_ext);
+            filename.replace_extension(default_ext);
         return filename.string();
     } catch (std::runtime_error &err) {
         throw Slic3r::PlaceholderParserError(_u8L("Failed processing of the output_filename_format template.") + "\n" + err.what());
@@ -107,8 +107,10 @@ void PrintBase::status_update_warnings(int step, PrintStateBase::WarningLevel /*
         auto status = print_object ? SlicingStatus(*print_object, step) : SlicingStatus(*this, step);
         m_status_callback(status);
     }
-    else if (! message.empty())
+    else if (! message.empty()) {
         printf("%s warning: %s\n",  print_object ? "print_object" : "print", message.c_str());
+        std::fflush(stdout);
+    }
 }
 
 std::mutex& PrintObjectBase::state_mutex(PrintBase *print)

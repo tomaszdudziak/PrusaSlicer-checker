@@ -5,13 +5,19 @@
 #ifndef slic3r_NSVGUtils_hpp_
 #define slic3r_NSVGUtils_hpp_
 
+#include <stddef.h>
 #include <memory>
 #include <string>
 #include <sstream>
+#include <cmath>
+#include <cstddef>
+
 #include "Polygon.hpp"
 #include "ExPolygon.hpp"
 #include "EmbossShape.hpp" // ExPolygonsWithIds
 #include "nanosvg/nanosvg.h"    // load SVG file
+#include "libslic3r/Point.hpp"
+#include "libslic3r/libslic3r.h"
 
 // Helper function to work with nano svg
 namespace Slic3r {
@@ -71,6 +77,7 @@ std::unique_ptr<std::string> read_from_disk(const std::string &path);
 using NSVGimage_ptr = std::unique_ptr<NSVGimage, void (*)(NSVGimage*)>;
 NSVGimage_ptr nsvgParseFromFile(const std::string &svg_file_path, const char *units = "mm", float dpi = 96.0f);
 NSVGimage_ptr nsvgParse(const std::string& file_data, const char *units = "mm", float dpi = 96.0f);
+NSVGimage *init_image(EmbossShape::SvgFile &svg_file);
 
 /// <summary>
 /// Iterate over shapes and calculate count

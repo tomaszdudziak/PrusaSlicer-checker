@@ -19,7 +19,8 @@
 
 #include <regex>
 #include <wx/numformatter.h>
-#include <wx/tooltip.h>
+#include <wx/bookctrl.h> // IWYU pragma: keep
+#include <wx/tooltip.h> // IWYU pragma: keep
 #include <wx/notebook.h>
 #include <wx/listbook.h>
 #include <wx/tokenzr.h>
@@ -142,7 +143,7 @@ void Field::PostInitialize()
 #else /* __APPLE__ */
 				case WXK_CONTROL_F:
 #endif /* __APPLE__ */
-				case 'F': { wxGetApp().plater()->search(false); break; }
+				case 'F': { wxGetApp().show_search_dialog(); break; }
 			    default: break;
 			    }
 			    if (tab_id >= 0)
@@ -205,9 +206,11 @@ wxString Field::get_tooltip_text(const wxString& default_string)
         opt_id += "]";
     }
 
+    bool newline_after_name = boost::iends_with(opt_id, "_gcode") && opt_id != "binary_gcode";
+
 	return from_u8(m_opt.tooltip) + "\n" + _L("default value") + "\t: " +
-        (boost::iends_with(opt_id, "_gcode") ? "\n" : "") + default_string +
-        (boost::iends_with(opt_id, "_gcode") ? "" : "\n") +
+        (newline_after_name ? "\n" : "") + default_string +
+        (newline_after_name ? "" : "\n") +
         _L("parameter name") + "\t: " + opt_id;
 }
 
@@ -302,9 +305,11 @@ void Field::get_value_by_opt_type(wxString& str, const bool check_value/* = true
                     }
                 }
                 else {
-                    show_error(m_parent, _L("Input value is out of range"));
-                    if (m_opt.min > val) val = m_opt.min;
-                    if (val > m_opt.max) val = m_opt.max;
+                    if (val < (m_opt.min - EPSILON) || val > (m_opt.max + EPSILON)) {
+                        show_error(m_parent, _L("Input value is out of range"));
+                    }
+
+                    val = std::clamp(static_cast<float>(val), m_opt.min, m_opt.max);
                     set_value(double_to_string(val), true);
                 }
             }
@@ -328,19 +333,22 @@ void Field::get_value_by_opt_type(wxString& str, const bool check_value/* = true
         if ((m_opt.type == coFloatOrPercent || m_opt.type == coFloatsOrPercents) && !str.IsEmpty() &&  str.Last() != '%')
         {
             double val = 0.;
+
+            bool is_na_value = m_opt.nullable && str == na_value();
+
             const char dec_sep = is_decimal_separator_point() ? '.' : ',';
             const char dec_sep_alt = dec_sep == '.' ? ',' : '.';
             // Replace the first incorrect separator in decimal number.
-            if (str.Replace(dec_sep_alt, dec_sep, false) != 0)
+            if (!is_na_value && str.Replace(dec_sep_alt, dec_sep, false) != 0)
                 set_value(str, false);
-
 
             // remove space and "mm" substring, if any exists
             str.Replace(" ", "", true);
             str.Replace("m", "", true);
 
-            if (!str.ToDouble(&val))
-            {
+            if (is_na_value) {
+                val = ConfigOptionFloatsOrPercentsNullable::nil_value().value;
+            } else if (!str.ToDouble(&val)) {
                 if (!check_value) {
                     m_value.clear();
                     break;
@@ -450,8 +458,11 @@ void TextCtrl::BUILD() {
     case coFloatsOrPercents: {
 		const auto val =  m_opt.get_default_value<ConfigOptionFloatsOrPercents>()->get_at(m_opt_idx);
         text_value = double_to_string(val.value);
-        if (val.percent)
+        if (val.percent) {
             text_value += "%";
+        }
+
+        m_last_meaningful_value = text_value;
         break;
 	}
 	case coPercent:
@@ -854,6 +865,7 @@ void SpinCtrl::BUILD() {
 	switch (m_opt.type) {
 	case coInt:
 		default_value = m_opt.default_value->getInt();
+        m_last_meaningful_value = default_value;
 		break;
 	case coInts:
 	{
@@ -873,16 +885,7 @@ void SpinCtrl::BUILD() {
     if (default_value != UNDEF_VALUE)
         text_value = wxString::Format(_T("%i"), default_value);
 
-    const int min_val = m_opt.min == -FLT_MAX
-#ifdef __WXOSX__
-    // We will forcibly set the input value for SpinControl, since the value
-    // inserted from the keyboard is not updated under OSX.
-    // So, we can't set min control value bigger then 0.
-    // Otherwise, it couldn't be possible to input from keyboard value
-    // less then min_val.
-    || m_opt.min > 0
-#endif
-    ? (int)0 : (int)m_opt.min;
+    const int min_val = m_opt.min == -FLT_MAX ? (int)0 : (int)m_opt.min;
 	const int max_val = m_opt.max < FLT_MAX ? (int)m_opt.max : INT_MAX;
 
 	auto temp = new ::SpinInput(m_parent, text_value, "", wxDefaultPosition, size,
@@ -1003,14 +1006,6 @@ void SpinCtrl::propagate_value()
     if (tmp_value == UNDEF_VALUE) {
         on_kill_focus();
     } else {
-#ifdef __WXOSX__
-        // check input value for minimum
-        if (m_opt.min > 0 && tmp_value < m_opt.min) {
-            ::SpinInput* spin = static_cast<::SpinInput*>(window);
-            spin->SetValue(m_opt.min);
-            spin->GetText()->SetInsertionPointEnd();
-        }
-#endif
         on_change_field();
     }
 }
@@ -1170,6 +1165,10 @@ void Choice::set_selection()
         field->SetSelection(m_opt.default_value->getInt());
 		break;
 	}
+	case coEnums:{
+        field->SetSelection(m_opt.default_value->getInts()[m_opt_idx]);
+		break;
+	}
 	case coFloat:
 	case coPercent:	{
 		double val = m_opt.default_value->getFloat();
@@ -1257,7 +1256,8 @@ void Choice::set_value(const boost::any& value, bool change_event)
 
 		break;
 	}
-	case coEnum: {
+	case coEnum:
+	case coEnums: {
 		auto val = m_opt.enum_def->enum_to_index(boost::any_cast<int>(value));
         assert(val.has_value());
 		field->SetSelection(val.has_value() ? *val : 0);
@@ -1322,7 +1322,7 @@ boost::any& Choice::get_value()
 		if (m_opt_id == rp_option)
 			return m_value = boost::any(ret_str);
 
-	if (m_opt.type == coEnum)
+	if (m_opt.type == coEnum || m_opt.type == coEnums)
         // Closed enum: The combo box item index returned by the field must be convertible to an enum value.
         m_value = m_opt.enum_def->index_to_enum(field->GetSelection());
     else if (m_opt.gui_type == ConfigOptionDef::GUIType::f_enum_open || m_opt.gui_type == ConfigOptionDef::GUIType::i_enum_open) {
