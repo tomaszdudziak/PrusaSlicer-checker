@@ -1298,8 +1298,8 @@ void GCodeGenerator::_do_export(Print& print, GCodeOutputStream &file, Thumbnail
                 file.write(this->writer().travel_to_z_force(last_z, "ensure z position"));
                 const double travel_z = std::max(last_z, double(m_max_layer_z));
                 file.write(this->writer().travel_to_z_force(travel_z, "ensure z position to clear all already printed objects"));
-                const Vec3crd from{to_3d(*this->last_position, scaled(this->m_last_layer_z))};
-                const Vec3crd to{0, 0, scaled(this->m_last_layer_z)};
+                const Vec3crd from{to_3d(*this->last_position, scaled(travel_z))};
+                const Vec3crd to{0, 0, scaled(travel_z)};
                 file.write(this->travel_to(from, to, ExtrusionRole::None, "move to origin position for next object", [](){return "";}));
                 m_enable_cooling_markers = true;
                 // Disable motion planner when traveling to first object point.
@@ -1895,6 +1895,12 @@ void GCodeGenerator::print_machine_envelope(GCodeOutputStream &file, const Print
             print.config().machine_max_jerk_y.values.front() * factor,
             print.config().machine_max_jerk_z.values.front() * factor,
             print.config().machine_max_jerk_e.values.front() * factor);
+
+        if (flavor == gcfMarlinFirmware) {
+            // New Marlin uses M205 J[mm] for junction deviation (only apply if it is > 0)
+            file.write_format(writer().set_junction_deviation(config().machine_max_junction_deviation.values.front()).c_str());
+        }
+
         if (flavor != gcfRepRapFirmware)
             file.write_format("M205 S%d T%d ; sets the minimum extruding and travel feed rate, mm/sec\n",
                 int(print.config().machine_min_extruding_rate.values.front() + 0.5),
@@ -2351,7 +2357,7 @@ std::pair<GCode::SmoothPath, std::size_t> split_with_seam(
                 loop, flipped, scaled_resolution, *seam_point, seam_point_merge_distance_threshold
             ),
             0};
-    } else if (scarf != nullptr && scarf->start_point == scarf->end_point) {
+    } else if (scarf != nullptr && scarf->start_point == scarf->end_point && !scarf->entire_loop) {
         return {smooth_path_cache.resolve_or_fit_split_with_seam(
             loop, flipped, scaled_resolution, scarf->start_point, seam_point_merge_distance_threshold
         ), 0};
@@ -2762,7 +2768,11 @@ LayerResult GCodeGenerator::process_layer(
             if (m_current_instance != next_instance) {
                 m_avoid_crossing_perimeters.use_external_mp_once = true;
             }
-            gcode += this->travel_to_first_position(first_point - to_3d(shift, 0), print_z, ExtrusionRole::Mixed, [this]() {
+
+            const double writer_z{m_writer.get_position().z()};
+            const double previous_z{writer_z <= std::numeric_limits<double>::epsilon() ? print_z : writer_z};
+
+            gcode += this->travel_to_first_position(first_point - to_3d(shift, 0), previous_z, ExtrusionRole::Mixed, [this]() {
                 if (m_writer.multiple_extruders) {
                     return std::string{""};
                 }
@@ -3535,8 +3545,13 @@ std::string GCodeGenerator::_extrude(
             cooling_marker_setspeed_comments = ";_EXTRUDE_SET_SPEED";
         }
 
-        if (path_attr.role == ExtrusionRole::ExternalPerimeter) {
+        if (path_attr.role.is_external_perimeter()) {
             cooling_marker_setspeed_comments += ";_EXTERNAL_PERIMETER";
+        } else if (path_attr.role.is_perimeter()) {
+            assert(path_attr.perimeter_index.has_value());
+            if (path_attr.perimeter_index.has_value()) {
+                cooling_marker_setspeed_comments += ";_INTERNAL_PERIMETER" + std::to_string(*path_attr.perimeter_index);
+            }
         }
     }
 
@@ -3630,19 +3645,20 @@ std::string GCodeGenerator::generate_travel_gcode(
     const Points3& travel,
     const std::string& comment,
     const std::function<std::string()>& insert_gcode,
-    const EnforceFirstZ enforce_first_z
+    const EnforceFirstZ enforce_first_z,
+    const std::function<bool()>& use_short_distance_acceleration
 ) {
-    std::string gcode;
-
-    const unsigned acceleration =(unsigned)(m_config.travel_acceleration.value + 0.5);
-
     if (travel.empty()) {
         return "";
     }
 
-    // generate G-code for the travel move
-    // use G1 because we rely on paths being straight (G0 may make round paths)
-    gcode += this->m_writer.set_travel_acceleration(acceleration);
+    const unsigned travel_acceleration                = static_cast<unsigned>(m_config.travel_acceleration.value + 0.5);
+    const unsigned travel_short_distance_acceleration = static_cast<unsigned>(m_config.travel_short_distance_acceleration.value + 0.5);
+
+    std::string gcode;
+    // Generate G-code for the travel move.
+    // Use G1 because we rely on paths being straight (G0 may make round paths).
+    gcode += this->m_writer.set_travel_acceleration(use_short_distance_acceleration() ? travel_short_distance_acceleration : travel_acceleration);
 
     bool already_inserted{false};
     for (std::size_t i{0}; i < travel.size(); ++i) {
@@ -3666,13 +3682,21 @@ std::string GCodeGenerator::generate_travel_gcode(
         } else {
             gcode += this->m_writer.travel_to_xyz(gcode_point, comment);
         }
+
         this->last_position = point.head<2>();
     }
 
-    if (! GCodeWriter::supports_separate_travel_acceleration(config().gcode_flavor)) {
+    // This is mainly for parts of the G-code export that don't take into account that travel acceleration could change during printing.
+    // Those parts of the G-code export always use the travel acceleration that was set last.
+    if (use_short_distance_acceleration() && travel_short_distance_acceleration != travel_acceleration) {
+        gcode += this->m_writer.set_travel_acceleration(travel_acceleration);
+    }
+
+    if (!GCodeWriter::supports_separate_travel_acceleration(config().gcode_flavor)) {
         // In case that this flavor does not support separate print and travel acceleration,
         // reset acceleration to default.
-        gcode += this->m_writer.set_travel_acceleration(acceleration);
+        // TODO: This doesn't seem to perform what the comment describes.
+        gcode += this->m_writer.set_travel_acceleration(travel_acceleration);
     }
 
     return gcode;
@@ -3830,6 +3854,12 @@ std::string GCodeGenerator::travel_to(
         travel.pop_back();
     }
     travel.emplace_back(end_point);
+
+    if (this->config().travel_short_distance_acceleration > 0.) {
+        return wipe_retract_gcode + generate_travel_gcode(travel, comment, insert_gcode, enforce_first_z, [&]() {
+                   return role.is_external_perimeter() && xy_path.length() < scaled<double>(EXTRUDER_CONFIG(retract_before_travel));
+               });
+    }
 
     return wipe_retract_gcode + generate_travel_gcode(travel, comment, insert_gcode, enforce_first_z);
 }

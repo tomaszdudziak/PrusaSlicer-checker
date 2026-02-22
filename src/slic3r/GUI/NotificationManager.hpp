@@ -258,6 +258,7 @@ public:
 	void set_download_URL_paused(size_t id);
 	void set_download_URL_canceled(size_t id);
 	void set_download_URL_error(size_t id, const std::string& text);
+    void set_download_URL_filename(size_t id, const std::string& filename);
 	// slicing progress
 	void init_slicing_progress_notification(std::function<bool()> cancel_callback);
 	void set_slicing_progress_began();
@@ -561,6 +562,7 @@ private:
 		void	set_paused(bool paused) { m_download_paused = paused; }
 		void    set_error_message(const std::string& message) { m_error_message = message; }
 		bool    compare_text(const std::string& text) const override { return false; };
+        void    set_filename(const std::string& filename_line);
 	protected: 
 		void	render_close_button(const float win_size_x, const float win_size_y,
 									const float win_pos_x, const float win_pos_y) override;
@@ -960,7 +962,7 @@ private:
 		, NotificationLevel::RegularNotificationLevel
 		, 10
 		// TRN: The text is followed by a hyperlink saying "here." It is necessary to split it in two phrases, sorry.
-		, _u8L("PrusaSlicer received a download request from Printables.com, but it's not allowed. You can allow it")
+		, _u8L("PrusaSlicer received a download request from supported website, but it's not allowed. You can allow it")
 		, _u8L("here.")
 		,  [](wxEvtHandler* evnthndlr) {
 			wxGetApp().open_preferences("downloader_url_registered", "Other");
